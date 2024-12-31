@@ -8,14 +8,16 @@ const port = process.env.PORT || 3000
 const app = express()
 const server = createServer(app);
 const io = new Server(server, {
-    origin: 'http://localhost:5173/',
-    credentials: true,
+    cors: {
+        origin: 'http://localhost:5173',
+        methods: ['GET', 'POST']
+    }
 });
 
 app.use(express.json());
 app.use(morgan('tiny'))
 app.use(cors({
-    origin: 'http://localhost:5173/',
+    origin: 'http://localhost:5173',
     credentials: true,
 }));
 
@@ -30,7 +32,8 @@ io.on("connection", (socket) => {
 
     // Broadcast drawing data
     socket.on('draw', (data) => {
-        socket.to(data.room).emit('draw', data);
+        console.log(`data recived ${data.action} ${data.roomId}`);
+        socket.to(data.roomId).emit('draw', { data });
     });
 
     // Handle disconnection
@@ -41,6 +44,6 @@ io.on("connection", (socket) => {
 })
 
 
-app.listen(port, () => {
+server.listen(port, () => {
     console.log(`Server is running on port ${port}`);
 });
