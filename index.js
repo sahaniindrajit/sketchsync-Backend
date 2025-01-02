@@ -21,6 +21,9 @@ app.use(cors({
     credentials: true,
 }));
 
+app.get("/ping", (req, res) => {
+    res.send({ message: "Server is alive!" });
+});
 
 io.on("connection", (socket) => {
 
@@ -39,7 +42,6 @@ io.on("connection", (socket) => {
     });
 
 })
-
 
 server.listen(port, () => {
     console.log(`Server is running on port ${port}`);
