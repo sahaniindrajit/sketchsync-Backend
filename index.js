@@ -23,16 +23,13 @@ app.use(cors({
 
 
 io.on("connection", (socket) => {
-    console.log("A user connected");
 
     socket.on('join-room', (roomId) => {
         socket.join(roomId);
-        console.log(`User ${socket.id} joined room: ${roomId}`);
     });
 
     // Broadcast drawing data
     socket.on('draw', (data) => {
-        console.log(`data recived ${data.action} ${data.roomId}`);
         socket.to(data.roomId).emit('draw', { data });
     });
 
