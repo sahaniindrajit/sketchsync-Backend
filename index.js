@@ -9,7 +9,7 @@ const app = express()
 const server = createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: 'https://sketchsync-sigma.vercel.app',
+        origin: 'https://sketchsync.onrender.com',
         methods: ['GET', 'POST']
     }
 });
@@ -17,7 +17,7 @@ const io = new Server(server, {
 app.use(express.json());
 app.use(morgan('tiny'))
 app.use(cors({
-    origin: 'https://sketchsync-sigma.vercel.app',
+    origin: 'https://sketchsync.onrender.com',
     credentials: true,
 }));
 
