@@ -9,7 +9,7 @@ const app = express()
 const server = createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: 'http://localhost:5173',
+        origin: 'https://sketchsync-sigma.vercel.app',
         methods: ['GET', 'POST']
     }
 });
@@ -17,7 +17,7 @@ const io = new Server(server, {
 app.use(express.json());
 app.use(morgan('tiny'))
 app.use(cors({
-    origin: 'http://localhost:5173',
+    origin: 'https://sketchsync-sigma.vercel.app',
     credentials: true,
 }));
 
