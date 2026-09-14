@@ -80,6 +80,12 @@ export function attachMcp(app: Express, rooms: RoomService, config: Config, extr
             frontendUrl: config.frontendUrl,
             ...extra,
         });
+        // Some clients omit `arguments` for tools whose inputs are all optional; treat that as {}.
+        for (const message of Array.isArray(req.body) ? req.body : [req.body]) {
+            if (message && typeof message === 'object' && message.method === 'tools/call' && message.params && message.params.arguments === undefined) {
+                message.params.arguments = {};
+            }
+        }
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
         res.on('close', () => {
             void transport.close();

@@ -389,6 +389,18 @@ describe('MCP robustness (review regressions)', () => {
         expect(one.x + one.points[2]).toBe(130);
     });
 
+    it('accepts tool calls that omit the arguments object', async () => {
+        const { call, roomId } = await setup();
+        await call('add_shapes', { shapes: [{ type: 'rect', x: 0, y: 0 }] });
+        const client = new Client({ name: 'bare', version: '1' });
+        await client.connect(new StreamableHTTPClientTransport(new URL(`${server.url}/mcp/${roomId}`)));
+        clients.push(client);
+        const board = (await client.callTool({ name: 'get_board' })) as ToolResult;
+        expect(board.isError).toBeFalsy();
+        const image = (await client.callTool({ name: 'get_board_image' })) as ToolResult;
+        expect(image.content.some((c) => c.type === 'image')).toBe(true);
+    });
+
     it('produces tool schemas without tuple-form items', async () => {
         const { roomId } = await setup();
         const client = new Client({ name: 'schema', version: '1' });
