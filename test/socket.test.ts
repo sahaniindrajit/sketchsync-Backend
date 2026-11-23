@@ -184,6 +184,9 @@ describe('realtime sockets', () => {
         a.emit(EVENTS.presence, { roomId, name: 'x'.repeat(5), color: 'red', x: 1, y: 2 });
         a.emit(EVENTS.presence, { roomId, name: '  Amber Otter  ', color: '#1971c2', x: 10.5, y: null });
         expect(await got).toEqual({ id: 'presence-a', name: 'Amber Otter', color: '#1971c2', x: 10.5, y: null });
+        const titled = new Promise<unknown>((resolve) => b.once(EVENTS.presence, resolve));
+        a.emit(EVENTS.presence, { roomId, name: 'Amber Otter', color: '#1971c2', x: null, y: null, title: '  Q3 planning  ', titleAt: 5 });
+        expect(await titled).toEqual({ id: 'presence-a', name: 'Amber Otter', color: '#1971c2', x: null, y: null, title: 'Q3 planning', titleAt: 5 });
         expect(echoed).toBe(false);
         const left = new Promise<unknown>((resolve) => b.once(EVENTS.presenceLeave, resolve));
         a.disconnect();
