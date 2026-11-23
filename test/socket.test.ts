@@ -170,4 +170,26 @@ describe('realtime sockets', () => {
         server = await startServer();
         expect(await (await fetch(`${server.url}/ping`)).json()).toEqual({ message: 'Server is alive!' });
     });
+
+    it('relays presence to other members only, drops invalid updates, and announces leaving', async () => {
+        server = await startServer();
+        const roomId = randomUUID();
+        const a = await server.connect();
+        const b = await server.connect();
+        await join(a, roomId, { clientId: 'presence-a' });
+        await join(b, roomId);
+        const got = new Promise<unknown>((resolve) => b.once(EVENTS.presence, resolve));
+        let echoed = false;
+        a.on(EVENTS.presence, () => (echoed = true));
+        a.emit(EVENTS.presence, { roomId, name: 'x'.repeat(5), color: 'red', x: 1, y: 2 });
+        a.emit(EVENTS.presence, { roomId, name: '  Amber Otter  ', color: '#1971c2', x: 10.5, y: null });
+        expect(await got).toEqual({ id: 'presence-a', name: 'Amber Otter', color: '#1971c2', x: 10.5, y: null });
+        const titled = new Promise<unknown>((resolve) => b.once(EVENTS.presence, resolve));
+        a.emit(EVENTS.presence, { roomId, name: 'Amber Otter', color: '#1971c2', x: null, y: null, title: '  Q3 planning  ', titleAt: 5 });
+        expect(await titled).toEqual({ id: 'presence-a', name: 'Amber Otter', color: '#1971c2', x: null, y: null, title: 'Q3 planning', titleAt: 5 });
+        expect(echoed).toBe(false);
+        const left = new Promise<unknown>((resolve) => b.once(EVENTS.presenceLeave, resolve));
+        a.disconnect();
+        expect(await left).toEqual({ id: 'presence-a' });
+    });
 });
