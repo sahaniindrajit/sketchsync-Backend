@@ -1,7 +1,7 @@
 import type { Server, Socket } from 'socket.io';
 import { RoomError, type RoomService } from '../rooms/RoomService.js';
 import { sortByZ } from '../shared/ops.js';
-import { CLIENT_ID_RE, EVENTS, isValidRoomId, parseOpId, PROTOCOL_VERSION, type JoinAck, type OpAck, type OpBroadcast } from '../shared/protocol.js';
+import { cleanPresence, CLIENT_ID_RE, EVENTS, isValidRoomId, parseOpId, PROTOCOL_VERSION, type JoinAck, type OpAck, type OpBroadcast } from '../shared/protocol.js';
 
 export interface RealtimeOptions {
     opsPerSecond: number;
@@ -74,6 +74,7 @@ export function attachRealtime(io: Server, rooms: RoomService, opts: RealtimeOpt
         let currentRoom: string | null = null;
         let clientId: string | null = null;
         const allowOp = bucket(opts.opsPerSecond, opts.opsPerSecond * 2);
+        const allowPresence = bucket(30, 40);
         const allowJoin = bucket(opts.joinsPerMinute / 60, Math.max(3, Math.ceil(opts.joinsPerMinute / 6)));
 
         const leaveCurrent = () => {
@@ -83,6 +84,7 @@ export function attachRealtime(io: Server, rooms: RoomService, opts: RealtimeOpt
                 roomOwners.delete(clientId);
                 if (roomOwners.size === 0) owners.delete(currentRoom);
             }
+            if (clientId) socket.to(currentRoom).emit(EVENTS.presenceLeave, { id: clientId });
             rooms.leave(currentRoom);
             socket.leave(currentRoom);
             currentRoom = null;
@@ -142,6 +144,15 @@ export function attachRealtime(io: Server, rooms: RoomService, opts: RealtimeOpt
             if (!allowOp()) return ack({ ok: false, error: 'Rate limited', code: 'rate_limited' });
             const result = rooms.apply(roomId, p.op, { origin: `user:${clientId}`, opId: p.opId, sequenced: true });
             ack(result.ok ? { ok: true, seq: result.seq, duplicate: result.duplicate || undefined } : { ok: false, error: result.error, code: result.code });
+        });
+
+        // Presence is best-effort: invalid or excess updates are dropped silently.
+        socket.on(EVENTS.presence, (payload: unknown) => {
+            const roomId = typeof (payload as { roomId?: unknown })?.roomId === 'string' ? (payload as { roomId: string }).roomId.toLowerCase() : '';
+            if (!currentRoom || roomId !== currentRoom || !clientId || !allowPresence()) return;
+            const clean = cleanPresence(payload);
+            if (!clean) return;
+            socket.to(currentRoom).volatile.emit(EVENTS.presence, { id: clientId, ...clean });
         });
 
         socket.on('disconnect', leaveCurrent);
