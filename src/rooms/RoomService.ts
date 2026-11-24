@@ -85,6 +85,38 @@ export class RoomService extends EventEmitter<RoomServiceEvents> {
         return { room, fresh: true };
     }
 
+    /**
+     * Loads a saved board into memory (no-op if it's already loaded). Later joins see it as
+     * an existing room, so browsers don't re-upload their cached copy.
+     */
+    hydrate(roomId: string, shapes: Shape[], seq: number): Room {
+        const existing = this.store.get(roomId);
+        if (existing) return existing;
+        this.makeSpace();
+        const map = new Map(shapes.map((s) => [s.id, s]));
+        let bytes = 0;
+        for (const s of map.values()) bytes += shapeBytes(s);
+        const room: Room = {
+            id: roomId,
+            shapes: map,
+            seq,
+            bytes,
+            lastActiveAt: this.now(),
+            connections: 0,
+            clients: new Map(),
+            retired: new Set(),
+        };
+        this.totalBytes += bytes;
+        this.store.set(room);
+        return room;
+    }
+
+    /** Drops a room from memory (e.g. the board was deleted). */
+    remove(roomId: string) {
+        const room = this.store.get(roomId);
+        if (room) this.deleteRoom(room);
+    }
+
     leave(roomId: string) {
         const room = this.store.get(roomId);
         if (!room) return;
