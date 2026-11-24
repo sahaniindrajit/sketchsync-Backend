@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as joinPath } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -155,7 +157,7 @@ describe('Phase 4 MCP tools', () => {
         const end = resolveLinePoints(yes, (id) => moved.get(id)).slice(-2);
         const home = getShapeBounds(moved.get('home')!, (id) => moved.get(id));
         expect(end[0]).toBeGreaterThan(home.x - 10);
-        await saveImage(call, '/tmp/claude-0/-root-code-personal-whiteboard/f684010f-7d99-4d10-9d79-7db34bafbaed/scratchpad/phase4-flowchart.png');
+        await saveImage(call, joinPath(tmpdir(), 'phase4-flowchart.png'));
     });
 
     it('write_solution indents step content past wide step numbers', async () => {
@@ -239,6 +241,6 @@ describe('Phase 4 MCP tools', () => {
         const heavy = Array.from({ length: 5 }, () => ({ latex: 'x+'.repeat(1990) + 'x' }));
         expect(text(await call('write_solution', { steps: heavy }))).toMatch(/too much LaTeX/);
         expect(text(await call('write_solution', { steps: [{}] }))).toMatch(/needs text, latex, or both/);
-        await saveImage(call, '/tmp/claude-0/-root-code-personal-whiteboard/f684010f-7d99-4d10-9d79-7db34bafbaed/scratchpad/phase4-solution.png');
+        await saveImage(call, joinPath(tmpdir(), 'phase4-solution.png'));
     });
 });

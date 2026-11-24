@@ -79,8 +79,8 @@ export function registerExtraTools(server: McpServer, helpers: ToolHelpers) {
             annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         },
         ({ board, nodes, edges, direction, x, y, title }) =>
-            run(() => {
-                const room = resolveRoom(board);
+            run(async () => {
+                const room = await resolveRoom(board);
                 const ids = new Set<string>();
                 for (const n of nodes) {
                     if (ids.has(n.id)) throw new ToolInputError(`Duplicate node id "${n.id}".`);
@@ -182,8 +182,8 @@ export function registerExtraTools(server: McpServer, helpers: ToolHelpers) {
             annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         },
         ({ board, latex, x, y, fontSize, displayMode, color }) =>
-            run(() => {
-                const room = resolveRoom(board);
+            run(async () => {
+                const room = await resolveRoom(board);
                 const size = fontSize ?? DEFAULTS.mathFontSize;
                 const display = displayMode ?? true;
                 const rendered = checkLatex(latex, size, display);
@@ -239,8 +239,8 @@ export function registerExtraTools(server: McpServer, helpers: ToolHelpers) {
             annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         },
         ({ board, title, problem, problemLatex, steps, answer, x, y, width, color }) =>
-            run(() => {
-                const room = resolveRoom(board);
+            run(async () => {
+                const room = await resolveRoom(board);
                 if (steps.some((s) => !s.text && !s.latex)) throw new ToolInputError('Each step needs text, latex, or both.');
                 const latexChars = [problemLatex, answer, ...steps.map((s) => s.latex)].reduce((n, l) => n + (l?.length ?? 0), 0);
                 if (latexChars > 8000) throw new ToolInputError('This solution has too much LaTeX for one call (8000 characters max). Split it into several write_solution calls.');

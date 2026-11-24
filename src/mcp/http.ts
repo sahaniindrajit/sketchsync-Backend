@@ -2,7 +2,11 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import cors from 'cors';
 import express, { type Express, type Request, type Response } from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
+import { randomUUID } from 'node:crypto';
+import { bearer } from '../auth/tokens.js';
 import type { Config } from '../config.js';
+import { mcpAuthFor, type McpAuth } from '../oauth/routes.js';
+import type { Platform } from '../platform.js';
 import type { RoomService } from '../rooms/RoomService.js';
 import { isValidRoomId } from '../shared/protocol.js';
 import { createMcpServer, type McpContext } from './server.js';
@@ -30,6 +34,10 @@ function friendly(name: string | undefined, ua: string): string | undefined {
     return KNOWN_CLIENTS.find(([re]) => re.test(name ?? '') || re.test(ua))?.[1] ?? name;
 }
 
+function friendlyName(name: string): string {
+    return (friendly(name, '') ?? name).replace(/[^A-Za-z0-9 ._-]/g, '').trim().slice(0, 40) || 'AI';
+}
+
 /** Friendly AI name shown to board viewers ("Claude is drawing…"). */
 export function clientNameFor(req: Request): string {
     const ua = req.get('user-agent') ?? '';
@@ -54,7 +62,49 @@ export function clientNameFor(req: Request): string {
 const jsonRpcError = (res: Response, status: number, message: string, code = -32000) =>
     res.status(status).json({ jsonrpc: '2.0', error: { code, message }, id: null });
 
-export function attachMcp(app: Express, rooms: RoomService, config: Config, extra: Partial<McpContext> = {}) {
+/** What a request may reach on a server with accounts: everything the signed-in person can, or one link-shared board. */
+function accountContext(platform: Platform, auth: McpAuth | null): Partial<McpContext> {
+    const { boards } = platform;
+    if (!auth) {
+        return {
+            access: async (roomId) => {
+                const { board, role } = await boards.access(roomId, null);
+                if (board) return role;
+                const created = await boards.ensure(roomId);
+                return created ? linkRoleOfNew(created) : null;
+            },
+            load: (roomId) => platform.store.load(roomId),
+        };
+    }
+    const { user } = auth;
+    return {
+        access: async (roomId) => (await boards.access(roomId, user)).role,
+        load: (roomId) => platform.store.load(roomId),
+        account: {
+            userName: user.name,
+            listBoards: (query) => boards.listForUser(user, query),
+            createBoard: async (title) => {
+                const board = await boards.create(randomUUID(), user.id, title);
+                return { id: board.id, title: board.title };
+            },
+            renameBoard: async (roomId, title) => {
+                const at = Date.now();
+                if (await boards.setTitle(roomId, title, at)) platform.live.broadcastTitle(roomId, title.trim().slice(0, 60), at);
+            },
+        },
+    };
+}
+
+const linkRoleOfNew = (b: { linkAccess: string }) => (b.linkAccess === 'edit' ? 'editor' : b.linkAccess === 'view' ? 'viewer' : null);
+
+export function attachMcp(app: Express, rooms: RoomService, config: Config, extra: Partial<McpContext> = {}, platform?: Platform) {
+    const unauthorized = (res: Response, invalid: boolean) => {
+        res.setHeader(
+            'WWW-Authenticate',
+            `Bearer resource_metadata="${config.publicUrl}/.well-known/oauth-protected-resource/mcp"${invalid ? ', error="invalid_token", error_description="Sign in again"' : ''}`,
+        );
+        return jsonRpcError(res, 401, invalid ? 'Your SketchSync sign-in expired. Reconnect to continue.' : 'Sign in to SketchSync to use your boards.');
+    };
     const paths = ['/mcp', '/mcp/:roomId'];
     // MCP clients may run in browsers; the board id is the credential, no cookies are used.
     app.use(paths, cors({ origin: '*', exposedHeaders: ['Mcp-Session-Id'], allowedHeaders: ['Content-Type', 'Authorization', 'Mcp-Session-Id', 'Mcp-Protocol-Version', 'Last-Event-ID'] }));
@@ -73,12 +123,30 @@ export function attachMcp(app: Express, rooms: RoomService, config: Config, extr
     app.post(paths, express.json({ limit: '4mb' }), async (req: Request, res: Response) => {
         const roomId = typeof req.params.roomId === 'string' ? req.params.roomId : undefined;
         if (roomId !== undefined && !isValidRoomId(roomId)) return jsonRpcError(res, 404, 'Unknown board link');
+        let accountCtx: Partial<McpContext> = {};
+        let clientName = clientNameFor(req);
+        if (platform) {
+            // The personal connector (/mcp) needs a sign-in; board links (/mcp/<id>) work without one while the board is shared by link.
+            const token = bearer(req.get('authorization'));
+            let auth: McpAuth | null;
+            try {
+                auth = token ? await mcpAuthFor(platform, token) : null;
+            } catch (err) {
+                console.error('MCP auth failed', err);
+                return jsonRpcError(res, 503, 'Could not check your sign-in right now');
+            }
+            if (token && !auth) return unauthorized(res, true);
+            if (!auth && roomId === undefined) return unauthorized(res, false);
+            if (auth && clientName === 'AI') clientName = friendlyName(auth.clientName);
+            accountCtx = accountContext(platform, auth);
+        }
         const server = createMcpServer({
             rooms,
             defaultRoomId: roomId?.toLowerCase(),
-            clientName: clientNameFor(req),
+            clientName,
             frontendUrl: config.frontendUrl,
             ...extra,
+            ...accountCtx,
         });
         // Some clients omit `arguments` for tools whose inputs are all optional; treat that as {}.
         for (const message of Array.isArray(req.body) ? req.body : [req.body]) {

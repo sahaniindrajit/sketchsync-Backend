@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import type { BoardSummary, Role } from '../boards/BoardRepo.js';
 import type { Room } from '../rooms/RoomStore.js';
 import type { RoomService } from '../rooms/RoomService.js';
 import { boardToPng, DEFAULT_IMAGE_SIZE, MAX_IMAGE_SIZE } from '../render/toPng.js';
@@ -23,10 +24,25 @@ export interface McpContext {
     validateLatex?: (latex: string, fontSize: number, displayMode: boolean) => void;
     /** Extra tools (e.g. flowcharts, math) registered by later modules. */
     extend?: (server: McpServer, helpers: ToolHelpers) => void;
+    /** The signed-in account behind a personal connector: it can reach every board the person can. */
+    account?: McpAccount;
+    /** The caller's role on a board (servers with accounts). Null means no access. */
+    access?: (roomId: string) => Promise<Role | null>;
+    /** Loads a saved board into memory (servers with accounts). */
+    load?: (roomId: string) => Promise<Room | null>;
 }
 
+export interface McpAccount {
+    userName: string;
+    listBoards: (query?: string) => Promise<BoardSummary[]>;
+    createBoard: (title: string) => Promise<{ id: string; title: string }>;
+    renameBoard: (roomId: string, title: string) => Promise<void>;
+}
+
+export type BoardMode = 'read' | 'write';
+
 export interface ToolHelpers {
-    resolveRoom: (board?: string) => Room;
+    resolveRoom: (board?: string, mode?: BoardMode) => Promise<Room>;
     applyOps: (room: Room, ops: Op[]) => void;
     origin: Origin;
     ok: (text: string, structured?: Record<string, unknown>) => CallToolResult;
@@ -39,7 +55,7 @@ export const boardArg = z
     .string()
     .max(500)
     .optional()
-    .describe('Board link or id. Optional when the connector URL already points at a board (…/mcp/<boardId>).');
+    .describe('Board name, link or id (call list_boards to see your boards). Optional when the connector URL already points at a board (…/mcp/<boardId>).');
 
 const INSTRUCTIONS = `SketchSync is a collaborative whiteboard. These tools read and edit a board live: people viewing it see your changes immediately.
 
@@ -47,6 +63,7 @@ Coordinates: board pixels, origin at the top-left, x grows right, y grows down. 
 Colors are hex strings ("#1e1e1e", "#e03131", "#1971c2", "#2f9e44", "#f08c00") or "transparent".
 
 Workflow tips:
+- With a personal connector you can reach all of the user's boards: call list_boards to see them, and pass \`board\` (a name like "Roadmap", or an id) to every tool. create_board starts a new one.
 - Call get_board first to see what exists (ids, positions, labels). Use get_board_image when the board has hand drawings or images, or to check your layout visually.
 - Put new diagrams in free space: omit x/y (or pass placement "auto") and they are placed to the right of existing content.
 - Connect shapes with arrows using {shapeId}; connectors follow shapes when they move.
@@ -61,17 +78,41 @@ export function createMcpServer(ctx: McpContext): McpServer {
     const measurer = serverMeasurer(ctx.math);
     const boardUrl = (roomId: string) => `${ctx.frontendUrl.replace(/\/+$/, '')}/board/${roomId}`;
 
-    const resolveRoom = (board?: string): Room => {
-        const roomId = board ? extractRoomId(board) : ctx.defaultRoomId;
+    /** Finds one of the account's boards by name: exact match first, then a unique partial match. */
+    const findByName = async (name: string): Promise<string> => {
+        const all = await ctx.account!.listBoards();
+        const needle = name.trim().toLowerCase();
+        const label = (b: BoardSummary) => `"${b.title || 'Untitled'}" (${b.id})`;
+        const exact = all.filter((b) => b.title.trim().toLowerCase() === needle);
+        const matches = exact.length ? exact : all.filter((b) => b.title.toLowerCase().includes(needle));
+        if (matches.length === 1) return matches[0].id;
+        if (!matches.length) throw new ToolInputError(`No board named "${name}". Call list_boards to see the user's boards, or create_board to make one.`);
+        throw new ToolInputError(`Several boards match "${name}": ${matches.slice(0, 10).map(label).join(', ')}. Pass the id instead.`);
+    };
+
+    const resolveRoom = async (board?: string, mode: BoardMode = 'write'): Promise<Room> => {
+        let roomId = board ? extractRoomId(board) : ctx.defaultRoomId;
+        if (!roomId && board && ctx.account) roomId = await findByName(board);
         if (!roomId) {
             throw new ToolInputError(
-                board
-                    ? `"${board}" is not a SketchSync board link or id.`
-                    : 'No board specified. Pass `board` with the board link (e.g. https://sketchsync.onrender.com/board/<id>), or connect using the board-specific MCP URL.',
+                ctx.account
+                    ? 'No board specified. Pass `board` with a board name or id (call list_boards to see them).'
+                    : board
+                      ? `"${board}" is not a SketchSync board link or id.`
+                      : 'No board specified. Pass `board` with the board link (e.g. https://sketchsync.onrender.com/board/<id>), or connect using the board-specific MCP URL.',
             );
         }
-        const room = ctx.rooms.getRoom(roomId);
+        if (ctx.access) {
+            const role = await ctx.access(roomId);
+            if (!role) throw new ToolInputError(`You don't have access to board ${roomId}. ${ctx.account ? 'Call list_boards to see the boards you can use.' : 'Its owner has not shared it by link.'}`);
+            if (mode === 'write' && role === 'viewer') throw new ToolInputError(`Board ${roomId} is shared with ${ctx.account ? 'this account' : 'link holders'} as view-only, so it can't be changed.`);
+        }
+        const room = ctx.rooms.getRoom(roomId) ?? (ctx.load ? await ctx.load(roomId) : undefined);
         if (!room) {
+            if (ctx.load) {
+                // Saved but never drawn on: start it empty.
+                return ctx.rooms.hydrate(roomId, [], 0);
+            }
             throw new ToolInputError(
                 `Board ${roomId} is not open on the server right now. Ask the user to open ${boardUrl(roomId)} in a browser (this loads it), then try again.`,
             );
@@ -120,8 +161,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
             annotations: { readOnlyHint: true, openWorldHint: false },
         },
         ({ board, detail, ids, limit }) =>
-            run(() => {
-                const room = resolveRoom(board);
+            run(async () => {
+                const room = await resolveRoom(board, 'read');
                 const description = describeBoard(room.shapes, measurer, { full: detail === 'full', ids, limit });
                 return ok(`Board ${room.id} (${boardUrl(room.id)}) has ${description.shapeCount} shape(s).`, { boardId: room.id, boardUrl: boardUrl(room.id), ...description });
             }),
@@ -146,8 +187,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
             annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         },
         ({ board, shapes, placement }) =>
-            run(() => {
-                const room = resolveRoom(board);
+            run(async () => {
+                const room = await resolveRoom(board);
                 const built = buildShapes(shapes, placement, { existing: room.shapes, origin, measurer });
                 applyOps(room, [{ kind: 'add', shapes: built.shapes }]);
                 const created = built.shapes.map((s) => summarizeShape(room.shapes.get(s.id) ?? s, room.shapes, measurer));
@@ -168,8 +209,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
             annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
         },
         ({ board, updates }) =>
-            run(() => {
-                const room = resolveRoom(board);
+            run(async () => {
+                const room = await resolveRoom(board);
                 const seen = new Set<string>();
                 for (const u of updates) {
                     if (seen.has(u.id)) throw new ToolInputError(`"${u.id}" appears more than once; combine its changes into one update.`);
@@ -200,8 +241,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
             annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
         },
         ({ board, ids }) =>
-            run(() => {
-                const room = resolveRoom(board);
+            run(async () => {
+                const room = await resolveRoom(board);
                 const existing = ids.filter((id) => room.shapes.has(id));
                 const unknown = ids.filter((id) => !room.shapes.has(id));
                 if (existing.length) applyOps(room, [{ kind: 'delete', ids: existing }]);
@@ -218,8 +259,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
             annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
         },
         ({ board }) =>
-            run(() => {
-                const room = resolveRoom(board);
+            run(async () => {
+                const room = await resolveRoom(board);
                 const count = room.shapes.size;
                 applyOps(room, [{ kind: 'clear' }]);
                 return ok(`Cleared the board (${count} shape(s) removed).`);
@@ -249,8 +290,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
             annotations: { readOnlyHint: true, openWorldHint: false },
         },
         ({ board, region, shapeIds, maxSize }) =>
-            run(() => {
-                const room = resolveRoom(board);
+            run(async () => {
+                const room = await resolveRoom(board, 'read');
                 if (room.shapes.size === 0 && !region) return ok('The board is empty.');
                 let area = region;
                 if (!area && shapeIds?.length) {
@@ -277,6 +318,65 @@ export function createMcpServer(ctx: McpContext): McpServer {
             }),
     );
 
+    if (ctx.account) registerAccountTools(server, ctx.account, { ok, run, boardUrl, resolveRoom });
+
     ctx.extend?.(server, { resolveRoom, applyOps, origin, ok, run, boardUrl, ctx });
     return server;
+}
+
+/** Tools for a personal connector: find, create and rename the person's boards. */
+function registerAccountTools(server: McpServer, account: McpAccount, h: Pick<ToolHelpers, 'ok' | 'run' | 'boardUrl' | 'resolveRoom'>) {
+    const titleArg = z.string().trim().min(1).max(60);
+    server.registerTool(
+        'list_boards',
+        {
+            title: 'List boards',
+            description: `Lists the boards ${account.userName} can open: their own, ones shared with them, and ones they opened by link. Shows each board's name, id, link, your role (owner/editor/viewer) and size. Use the name or id as \`board\` in other tools.`,
+            inputSchema: { query: z.string().max(100).optional().describe('Only boards whose name contains this') },
+            annotations: { readOnlyHint: true, openWorldHint: false },
+        },
+        ({ query }) =>
+            h.run(async () => {
+                const boards = await account.listBoards(query);
+                const list = boards.map((b) => ({
+                    id: b.id,
+                    name: b.title || 'Untitled',
+                    url: h.boardUrl(b.id),
+                    role: b.role,
+                    owner: b.relation === 'owned' ? 'you' : (b.owner?.name ?? 'anonymous'),
+                    shapes: b.shapeCount,
+                    updatedAt: b.updatedAt,
+                }));
+                return h.ok(boards.length ? `${boards.length} board(s)${query ? ` matching "${query}"` : ''}.` : query ? `No boards match "${query}".` : 'No boards yet. Use create_board to make one.', { boards: list });
+            }),
+    );
+    server.registerTool(
+        'create_board',
+        {
+            title: 'Create a board',
+            description: 'Creates a new empty board owned by the user and returns its id and link. Draw on it by passing the id (or name) as `board` to other tools.',
+            inputSchema: { name: titleArg.describe('Board name, e.g. "Q3 roadmap"') },
+            annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        },
+        ({ name }) =>
+            h.run(async () => {
+                const board = await account.createBoard(name);
+                return h.ok(`Created board "${board.title}". The user can open it at ${h.boardUrl(board.id)}.`, { id: board.id, name: board.title, url: h.boardUrl(board.id) });
+            }),
+    );
+    server.registerTool(
+        'rename_board',
+        {
+            title: 'Rename a board',
+            description: 'Renames a board the user owns or can edit.',
+            inputSchema: { board: z.string().max(500).describe('Board name, link or id'), name: titleArg },
+            annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        },
+        ({ board, name }) =>
+            h.run(async () => {
+                const room = await h.resolveRoom(board, 'write');
+                await account.renameBoard(room.id, name);
+                return h.ok(`Renamed the board to "${name}".`, { id: room.id, name, url: h.boardUrl(room.id) });
+            }),
+    );
 }

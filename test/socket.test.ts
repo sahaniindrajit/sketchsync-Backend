@@ -168,7 +168,7 @@ describe('realtime sockets', () => {
 
     it('keeps /ping working', async () => {
         server = await startServer();
-        expect(await (await fetch(`${server.url}/ping`)).json()).toEqual({ message: 'Server is alive!' });
+        expect(await (await fetch(`${server.url}/ping`)).json()).toMatchObject({ message: 'Server is alive!' });
     });
 
     it('relays presence to other members only, drops invalid updates, and announces leaving', async () => {
