@@ -26,6 +26,8 @@ export interface SvgOptions {
     math?: MathRenderer;
     /** Output pixels per board unit; text smaller than ~3 px is drawn as placeholder bars. */
     pixelScale?: number;
+    /** Leave the background transparent (previews drawn over the app's own background). */
+    transparent?: boolean;
 }
 
 export interface SvgResult {
@@ -90,7 +92,7 @@ export function boardToSvg(shapes: ReadonlyMap<string, Shape>, options: SvgOptio
     const svg =
         `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ` +
         `width="${r(region.width)}" height="${r(region.height)}" viewBox="${r(region.x)} ${r(region.y)} ${r(region.width)} ${r(region.height)}">` +
-        `<rect x="${r(region.x)}" y="${r(region.y)}" width="${r(region.width)}" height="${r(region.height)}" fill="#ffffff"/>` +
+        (options.transparent ? '' : `<rect x="${r(region.x)}" y="${r(region.y)}" width="${r(region.width)}" height="${r(region.height)}" fill="#ffffff"/>`) +
         body +
         `</svg>`;
     return { svg, region };

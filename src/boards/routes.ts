@@ -207,7 +207,7 @@ export function boardsRouter(platform: Platform) {
             res.setHeader('Cache-Control', 'private, max-age=5');
             res.type('image/svg+xml');
             if (!shapes.size) return res.send('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 250"/>');
-            res.send(boardToSvg(shapes, { padding: 40, math: mathForShape, pixelScale: 0.4 }).svg);
+            res.send(boardToSvg(shapes, { padding: 40, math: mathForShape, pixelScale: 0.4, transparent: true }).svg);
         } catch (err) {
             next(err);
         }

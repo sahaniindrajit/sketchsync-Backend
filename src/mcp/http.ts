@@ -69,7 +69,9 @@ function accountContext(platform: Platform, auth: McpAuth | null): Partial<McpCo
         return {
             access: async (roomId) => {
                 const { board, role } = await boards.access(roomId, null);
-                return board ? role : linkRoleOfNew(await boards.ensure(roomId));
+                if (board) return role;
+                const created = await boards.ensure(roomId);
+                return created ? linkRoleOfNew(created) : null;
             },
             load: (roomId) => platform.store.load(roomId),
         };

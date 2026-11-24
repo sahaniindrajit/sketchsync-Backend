@@ -103,6 +103,13 @@ const MIGRATIONS: string[] = [
     );
     CREATE INDEX oauth_tokens_user ON oauth_tokens (user_id, client_id);
     `,
+    `
+    -- Deleted board ids, so an open tab can't bring a deleted board back by reconnecting.
+    CREATE TABLE board_tombstones (
+        id text PRIMARY KEY,
+        deleted_at timestamptz NOT NULL DEFAULT now()
+    );
+    `,
 ];
 
 export function createDb(url: string): Db {

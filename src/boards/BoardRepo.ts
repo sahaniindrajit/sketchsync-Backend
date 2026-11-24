@@ -116,10 +116,13 @@ export class BoardRepo {
         return toMeta(rows[0]);
     }
 
-    /** Makes sure a row exists for a board opened by link (anonymous boards from before accounts, or brand new ones). */
-    async ensure(id: string): Promise<BoardMeta> {
-        await this.db.query('INSERT INTO boards (id) VALUES ($1) ON CONFLICT DO NOTHING', [id]);
-        return (await this.get(id))!;
+    /**
+     * Makes sure a row exists for a board opened by link (anonymous boards from before accounts, or brand new ones).
+     * Null for a deleted board: it stays deleted.
+     */
+    async ensure(id: string): Promise<BoardMeta | null> {
+        await this.db.query('INSERT INTO boards (id) SELECT $1 WHERE NOT EXISTS (SELECT 1 FROM board_tombstones WHERE id = $1) ON CONFLICT DO NOTHING', [id]);
+        return this.get(id);
     }
 
     /**
@@ -128,7 +131,10 @@ export class BoardRepo {
      */
     async claim(ids: string[], userId: string): Promise<string[]> {
         if (!ids.length) return [];
-        await this.db.query('INSERT INTO boards (id, owner_id) SELECT unnest($1::text[]), $2 ON CONFLICT DO NOTHING', [ids, userId]);
+        await this.db.query(
+            'INSERT INTO boards (id, owner_id) SELECT i, $2 FROM unnest($1::text[]) AS i WHERE NOT EXISTS (SELECT 1 FROM board_tombstones t WHERE t.id = i) ON CONFLICT DO NOTHING',
+            [ids, userId],
+        );
         await this.db.query('UPDATE boards SET owner_id = $2 WHERE id = ANY($1) AND owner_id IS NULL', [ids, userId]);
         const { rows } = await this.db.query<{ id: string }>('SELECT id FROM boards WHERE id = ANY($1) AND owner_id = $2', [ids, userId]);
         return rows.map((r) => r.id);
@@ -184,6 +190,7 @@ export class BoardRepo {
     }
 
     async delete(id: string) {
+        await this.db.query('INSERT INTO board_tombstones (id) VALUES ($1) ON CONFLICT DO NOTHING', [id]);
         await this.db.query('DELETE FROM boards WHERE id = $1', [id]);
     }
 

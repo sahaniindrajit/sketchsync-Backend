@@ -215,6 +215,9 @@ describe.skipIf(!DB_URL)('accounts and saved boards', () => {
         expect((await api(`/boards/${anon}`, { method: 'DELETE', token: carol.token })).body.removed).toBe('deleted');
         expect((await gone).role).toBeNull();
         expect((await api(`/boards/${anon}`, { token: carol.token })).status).toBe(404);
+        // A tab that still has it open can't bring it back by reconnecting.
+        expect(await join(await server.connect(), anon)).toMatchObject({ ok: false, code: 'not_found' });
+        expect((await api('/boards/import', { method: 'POST', token: carol.token, body: { ids: [anon] } })).body.imported).toEqual([]);
     });
 
     describe('personal MCP connector', () => {

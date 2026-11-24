@@ -159,6 +159,7 @@ export function attachRealtime(io: Server, rooms: RoomService, opts: RealtimeOpt
                     if (!board) {
                         // Opening a link to a board nobody saved yet starts an anonymous board, as before accounts.
                         board = await platform.boards.ensure(roomId);
+                        if (!board) return ack({ ok: false, error: 'This board was deleted.', code: 'not_found' });
                         found = linkRole(board.linkAccess);
                         member = false;
                     }
