@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { io as ioClient, type Socket } from 'socket.io-client';
-import { createApp, type AppHooks } from '../src/app.js';
+import { createApp, type AppHooks, type AppOptions } from '../src/app.js';
 import { config } from '../src/config.js';
 import { DEFAULTS, EVENTS, PROTOCOL_VERSION, type JoinAck, type LineShape, type OpAck, type OpBroadcast, type Shape } from '../src/shared/protocol.js';
 
@@ -48,8 +48,12 @@ export function arrow(overrides: Partial<LineShape> = {}): LineShape {
     };
 }
 
-export async function startServer(hooks?: AppHooks, overrides: Partial<typeof config> = {}) {
-    const app = createApp({ ...config, logRequests: false, socketOpsPerSecond: 1000, socketJoinsPerMinute: 6000, mcpRequestsPerSecond: 1000, ...overrides }, hooks);
+export async function startServer(hooks?: AppHooks, overrides: Partial<typeof config> = {}, options: AppOptions = {}) {
+    const app = createApp(
+        { ...config, logRequests: false, socketOpsPerSecond: 1000, socketJoinsPerMinute: 6000, mcpRequestsPerSecond: 1000, apiRequestsPerSecond: 10_000, ...overrides },
+        hooks,
+        options,
+    );
     await new Promise<void>((resolve) => app.server.listen(0, '127.0.0.1', resolve));
     const { port } = app.server.address() as AddressInfo;
     const url = `http://127.0.0.1:${port}`;
@@ -57,8 +61,8 @@ export async function startServer(hooks?: AppHooks, overrides: Partial<typeof co
     return {
         ...app,
         url,
-        async connect() {
-            const socket = ioClient(url, { transports: ['websocket'], forceNew: true });
+        async connect(token?: string) {
+            const socket = ioClient(url, { transports: ['websocket'], forceNew: true, auth: token ? { token } : undefined });
             sockets.push(socket);
             await new Promise<void>((resolve, reject) => {
                 socket.once('connect', () => resolve());
